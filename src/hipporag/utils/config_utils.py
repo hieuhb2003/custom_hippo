@@ -221,6 +221,20 @@ class BaseConfig:
         metadata={"help": "Feeding top k documents to the QA model for reading."},
     )
 
+    # API key rotation (e.g., OpenRouter free keys)
+    enable_api_key_rotation: bool = field(
+        default=False,
+        metadata={"help": "Enable rotating API keys for LLM provider (OpenRouter)."},
+    )
+    api_key_file_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to a text file containing API keys (one per line)."},
+    )
+    api_key_daily_quota: int = field(
+        default=20,
+        metadata={"help": "Max calls per key per day (used for rotation)."},
+    )
+
     # Save dir (highest level directory)
     save_dir: str = field(
         default=None,

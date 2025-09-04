@@ -185,18 +185,42 @@ class CacheOpenAI(BaseLLM):
 
         self.max_retries = kwargs.get("max_retries", 2)
 
-        if self.global_config.azure_endpoint is None:
-            self.openai_client = OpenAI(
-                base_url=self.llm_base_url,
-                http_client=client,
-                max_retries=self.max_retries,
-            )
-        else:
-            self.openai_client = AzureOpenAI(
-                api_version=self.global_config.azure_endpoint.split("api-version=")[1],
-                azure_endpoint=self.global_config.azure_endpoint,
-                max_retries=self.max_retries,
-            )
+        # API key rotation support (OpenRouter or compatible)
+        self._api_keys = []
+        self._api_key_idx = 0
+        self._key_usage = {}
+        if (
+            getattr(self.global_config, "enable_api_key_rotation", False)
+            and self.global_config.api_key_file_path
+        ):
+            try:
+                with open(self.global_config.api_key_file_path, "r") as f:
+                    self._api_keys = [line.strip() for line in f if line.strip()]
+                logger.info(f"Loaded {len(self._api_keys)} API keys for rotation.")
+            except Exception as e:
+                logger.warning(f"Failed to load API keys from file: {e}")
+
+        def _make_client(api_key: str | None):
+            if self.global_config.azure_endpoint is None:
+                return OpenAI(
+                    base_url=self.llm_base_url,
+                    api_key=api_key,
+                    http_client=client,
+                    max_retries=self.max_retries,
+                )
+            else:
+                return AzureOpenAI(
+                    api_version=self.global_config.azure_endpoint.split("api-version=")[
+                        1
+                    ],
+                    azure_endpoint=self.global_config.azure_endpoint,
+                    max_retries=self.max_retries,
+                )
+
+        self.openai_client = _make_client(
+            None if not self._api_keys else self._api_keys[0]
+        )
+        self._make_client = _make_client
 
         # Setup file logging to outputs/<run>/llm_calls.log
         try:
@@ -284,7 +308,33 @@ class CacheOpenAI(BaseLLM):
             # TODO strange version change in openai protocol, but our current vllm version not changed yet
             params["max_tokens"] = params.pop("max_completion_tokens")
 
-        response = self.openai_client.chat.completions.create(**params)
+        # rotate key when needed
+        def _should_rotate():
+            if not self._api_keys:
+                return False
+            key = self._api_keys[self._api_key_idx]
+            used = self._key_usage.get(key, 0)
+            return used >= getattr(self.global_config, "api_key_daily_quota", 20)
+
+        if self._api_keys and _should_rotate():
+            self._api_key_idx = (self._api_key_idx + 1) % len(self._api_keys)
+            key = self._api_keys[self._api_key_idx]
+            self.openai_client = self._make_client(key)
+
+        try:
+            response = self.openai_client.chat.completions.create(**params)
+        except Exception as e:
+            # on 401/429/5xx rotate and retry once
+            if self._api_keys:
+                self._api_key_idx = (self._api_key_idx + 1) % len(self._api_keys)
+                key = self._api_keys[self._api_key_idx]
+                logger.warning(
+                    f"LLM call failed, rotating API key to index {self._api_key_idx}"
+                )
+                self.openai_client = self._make_client(key)
+                response = self.openai_client.chat.completions.create(**params)
+            else:
+                raise
 
         response_message = response.choices[0].message.content
         assert isinstance(response_message, str), "response_message should be a string"
@@ -294,5 +344,10 @@ class CacheOpenAI(BaseLLM):
             "completion_tokens": response.usage.completion_tokens,
             "finish_reason": response.choices[0].finish_reason,
         }
+
+        # update usage counter
+        if self._api_keys:
+            key = self._api_keys[self._api_key_idx]
+            self._key_usage[key] = self._key_usage.get(key, 0) + 1
 
         return response_message, metadata

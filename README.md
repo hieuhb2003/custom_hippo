@@ -346,6 +346,45 @@ The corpus and optional query JSON files should have the following format:
 ]
 ```
 
+```python
+from src.hipporag.utils.config_utils import BaseConfig
+
+cfg = BaseConfig()
+cfg.enable_api_key_rotation = True
+cfg.llm_base_url = "https://openrouter.ai/api/v1"
+cfg.api_key_file_path = "keys.txt"   # mỗi dòng 1 key
+cfg.api_key_daily_quota = 20
+
+hipporag = HippoRAG(
+    save_dir=save_dir,
+    llm_model_name=llm_model_name,
+    embedding_model_name=embedding_model_name,
+    global_config=cfg,
+)
+```
+
+```sh
+export OPENAI_API_KEY='YOUR_OPENROUTER_KEY'   # OpenRouter chấp nhận biến này
+# (tuỳ chọn) export OPENROUTER_API_KEY='YOUR_OPENROUTER_KEY'
+```
+
+```python
+from src.hipporag.utils.config_utils import BaseConfig
+from src.hipporag import HippoRAG
+
+cfg = BaseConfig()
+cfg.llm_base_url = "https://openrouter.ai/api/v1"
+cfg.llm_name = "openai/gpt-4o-mini"  # hoặc model trả phí khác trên OpenRouter, ví dụ: "anthropic/claude-3.5-sonnet"
+cfg.enable_api_key_rotation = False   # tắt xoay key
+
+hipporag = HippoRAG(
+    save_dir="outputs/openai_openrouter",
+    llm_model_name=cfg.llm_name,
+    embedding_model_name="BAAI/bge-m3",
+    global_config=cfg,
+)
+```
+
 #### (Optional) Chunking Corpus
 
 When preparing your data, you may need to chunk each passage, as longer passage may be too complex for the OpenIE process.

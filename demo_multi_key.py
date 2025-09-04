@@ -9,6 +9,11 @@ cfg.chunk_tokens = 800
 cfg.chunk_overlap_tokens = 200
 cfg.chunk_encoding = "o200k_base"
 
+cfg.enable_api_key_rotation = True
+cfg.llm_base_url = "https://openrouter.ai/api/v1"
+cfg.api_key_file_path = "/Users/hieunguyenmanh/hippo2/HippoRAG/outputs/key.txt"  # mỗi dòng 1 key
+cfg.api_key_daily_quota = 20
+
 
 def main():
     # Sample docs
@@ -23,8 +28,8 @@ def main():
     ]
 
     # Configure OpenAI LLM and BGE-M3 embedding
-    save_dir = "outputs/openai_bgem3_3"
-    llm_model_name = "gpt-4o-mini"
+    save_dir = "outputs/openai_bgem3_multi_key"
+    llm_model_name = "openai/gpt-oss-20b:free"
     embedding_model_name = "BAAI/bge-m3"  # will be routed to BGEM3EmbeddingModel
 
     # HippoRAG instance
