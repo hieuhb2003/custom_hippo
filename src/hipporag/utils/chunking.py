@@ -3,6 +3,12 @@ import re
 from dataclasses import dataclass
 import logging
 from .misc_utils import compute_mdhash_id
+import json
+
+try:
+    import tiktoken
+except Exception:
+    tiktoken = None
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +30,14 @@ class DocumentChunker:
     Class for chunking documents into smaller pieces.
     """
 
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 100):
+    def __init__(
+        self,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 100,
+        token_size: int = None,
+        token_overlap: int = None,
+        encoding_name: str = "o200k_base",
+    ):
         """
         Initialize the DocumentChunker.
 
@@ -34,8 +47,47 @@ class DocumentChunker:
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.token_size = token_size
+        self.token_overlap = token_overlap
+        self.encoding_name = encoding_name
+        self.encoding = None
+        if token_size is not None and tiktoken is not None:
+            try:
+                self.encoding = tiktoken.get_encoding(encoding_name)
+            except Exception:
+                logger.warning(
+                    f"tiktoken encoding '{encoding_name}' not found. Falling back to char-based chunking."
+                )
+                self.encoding = None
         # Dictionary to map chunk IDs to document IDs
         self.chunk_to_doc = {}
+
+    def _chunk_document_by_tokens(
+        self, doc_id: str, content: str
+    ) -> List[DocumentChunk]:
+        chunks = []
+        tokens = self.encoding.encode(content)
+        if len(tokens) == 0:
+            return chunks
+        start = 0
+        idx = 0
+        size = int(self.token_size or 800)
+        overlap = int(self.token_overlap or 200)
+        while start < len(tokens):
+            end = min(start + size, len(tokens))
+            piece = self.encoding.decode(tokens[start:end])
+            chunk_id = compute_mdhash_id(piece, prefix="chunk-")
+            chunks.append(
+                DocumentChunk(
+                    chunk_id=chunk_id, doc_id=doc_id, content=piece, chunk_index=idx
+                )
+            )
+            self.chunk_to_doc[chunk_id] = doc_id
+            idx += 1
+            if end >= len(tokens):
+                break
+            start = max(0, end - overlap)
+        return chunks
 
     def chunk_document(self, doc_id: str, content: str) -> List[DocumentChunk]:
         """
@@ -55,7 +107,11 @@ class DocumentChunker:
             logger.warning(f"Empty document content for doc_id: {doc_id}")
             return chunks
 
-        # Handle content shorter than chunk_size
+        # Token-based chunking if configured and available
+        if self.encoding is not None and self.token_size is not None:
+            return self._chunk_document_by_tokens(doc_id, content)
+
+        # Fallback: Handle content shorter than chunk_size (char-based)
         if len(content) <= self.chunk_size:
             chunk_id = compute_mdhash_id(content, prefix="chunk-")
             chunk = DocumentChunk(
@@ -141,3 +197,17 @@ class DocumentChunker:
             Dict[str, str]: Dictionary mapping chunk IDs to document IDs
         """
         return self.chunk_to_doc.copy()
+
+    def get_doc_to_chunks_mapping(self) -> Dict[str, List[str]]:
+        doc_to_chunks: Dict[str, List[str]] = {}
+        for c_id, d_id in self.chunk_to_doc.items():
+            doc_to_chunks.setdefault(d_id, []).append(c_id)
+        return doc_to_chunks
+
+    def dump_mappings(self, path: str) -> None:
+        mappings = {
+            "chunk_to_doc": self.get_chunk_to_doc_mapping(),
+            "doc_to_chunks": self.get_doc_to_chunks_mapping(),
+        }
+        with open(path, "w") as f:
+            json.dump(mappings, f, ensure_ascii=False, indent=2)

@@ -1,6 +1,13 @@
 import os
 from src.hipporag import HippoRAG
 from multiprocessing import freeze_support
+from src.hipporag.utils.config_utils import BaseConfig
+
+cfg = BaseConfig()
+cfg.enable_chunking = True
+cfg.chunk_tokens = 800
+cfg.chunk_overlap_tokens = 200
+cfg.chunk_encoding = "o200k_base"
 
 
 def main():
@@ -18,7 +25,7 @@ def main():
     ]
 
     # Configure OpenAI LLM and BGE-M3 embedding
-    save_dir = "outputs/openai_bgem3_2"
+    save_dir = "outputs/openai_bgem3_3"
     llm_model_name = "gpt-4o-mini"
     embedding_model_name = "BAAI/bge-m3"  # will be routed to BGEM3EmbeddingModel
 
@@ -27,6 +34,7 @@ def main():
         save_dir=save_dir,
         llm_model_name=llm_model_name,
         embedding_model_name=embedding_model_name,
+        global_config=cfg,
     )
 
     # Index

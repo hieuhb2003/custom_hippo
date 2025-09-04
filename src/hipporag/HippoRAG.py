@@ -33,6 +33,7 @@ from .utils.misc_utils import NerRawOutput, TripleRawOutput
 from .utils.embed_utils import retrieve_knn
 from .utils.typing import Triple
 from .utils.config_utils import BaseConfig
+from .utils.chunking import DocumentChunker
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,19 @@ class HippoRAG:
 
         self.ent_node_to_chunk_ids = None
 
+        # Initialize chunker (token-based if enabled)
+        self.chunker = DocumentChunker(
+            chunk_size=1000,
+            chunk_overlap=100,
+            token_size=self.global_config.chunk_tokens
+            if getattr(self.global_config, "enable_chunking", False)
+            else None,
+            token_overlap=self.global_config.chunk_overlap_tokens
+            if getattr(self.global_config, "enable_chunking", False)
+            else None,
+            encoding_name=getattr(self.global_config, "chunk_encoding", "o200k_base"),
+        )
+
     def initialize_graph(self):
         """
         Initializes a graph using a Pickle file if available or creates a new graph.
@@ -259,10 +273,29 @@ class HippoRAG:
 
         logger.info(f"Performing OpenIE")
 
-        if self.global_config.openie_mode == "offline":
-            self.pre_openie(docs)
+        # Optional token-based chunking
+        if getattr(self.global_config, "enable_chunking", False):
+            logger.info("Chunking documents by tokens")
+            doc_dict = {f"doc-{i}": d for i, d in enumerate(docs)}
+            doc_chunks = self.chunker.chunk_documents(doc_dict)
+            chunk_contents = [c.content for c in doc_chunks]
+            chunk_ids = [c.chunk_id for c in doc_chunks]
+            # Dump mapping
+            mapping_path = os.path.join(self.working_dir, "chunk_mapping.json")
+            print("chunking")
+            try:
+                self.chunker.dump_mappings(mapping_path)
+                logger.info(f"Saved chunk mapping to {mapping_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save chunk mapping: {e}")
+        else:
+            chunk_contents = docs
+            chunk_ids = [compute_mdhash_id(d, prefix="chunk-") for d in docs]
 
-        self.chunk_embedding_store.insert_strings(docs)
+        if self.global_config.openie_mode == "offline":
+            self.pre_openie(chunk_contents)
+
+        self.chunk_embedding_store.insert_strings(chunk_contents)
         chunk_to_rows = self.chunk_embedding_store.get_all_id_to_rows()
 
         all_openie_info, chunk_keys_to_process = self.load_existing_openie(
