@@ -164,6 +164,53 @@ class EntityDescriptionGenerator:
         # For now, aggregate metadata is empty; individual call metadata is not combined here
         return descriptions, {}
 
+    def batch_generate_descriptions_from_triplets(
+        self, entities: Set[str], triplets: List[List[str]], passage: str
+    ) -> Tuple[Dict[str, str], Dict]:
+        """
+        Single LLM call to generate descriptions for ALL entities, with both passage and
+        extracted triples as context to reduce misses and cost.
+        """
+        if not entities:
+            return {}, {}
+
+        entities_json = json.dumps(sorted(list(entities)))
+        triples_json = json.dumps(triplets)
+
+        messages = self.prompt_template_manager.render(
+            name="entity_description_batched",
+            passage=passage,
+            entities_json=entities_json,
+            triples_json=triples_json,
+        )
+
+        raw_response = ""
+        metadata = {}
+        try:
+            raw_response, metadata, cache_hit = self.llm_model.infer(messages=messages)
+            metadata["cache_hit"] = cache_hit
+
+            # Try parse JSON object mapping entity->description
+            start = raw_response.find("{")
+            end = raw_response.rfind("}") + 1
+            if start >= 0 and end > start:
+                json_str = raw_response[start:end]
+                data = json.loads(json_str)
+            else:
+                data = {}
+
+            descriptions = {}
+            for ent in entities:
+                desc = data.get(ent)
+                if not desc:
+                    desc = "Entity mentioned in the document"
+                descriptions[ent] = desc
+
+            return descriptions, metadata
+        except Exception as e:
+            logger.warning(f"Error in batched entity description generation: {e}")
+            return {ent: "Entity mentioned in the document" for ent in entities}, {}
+
     def extract_entities_from_triplets(self, triplets: List[List[str]]) -> Set[str]:
         """
         Extract unique entities from a list of triplets.

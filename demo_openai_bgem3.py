@@ -18,7 +18,7 @@ def main():
     ]
 
     # Configure OpenAI LLM and BGE-M3 embedding
-    save_dir = "outputs/openai_bgem3"
+    save_dir = "outputs/openai_bgem3_2"
     llm_model_name = "gpt-4o-mini"
     embedding_model_name = "BAAI/bge-m3"  # will be routed to BGEM3EmbeddingModel
 

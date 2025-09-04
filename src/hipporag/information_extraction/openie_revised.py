@@ -116,10 +116,10 @@ class RevisedOpenIE:
                 if triplet[2]:  # Object
                     entities.add(triplet[2])
 
-        # Generate descriptions for the entities
+        # Generate descriptions for the entities in ONE call using passage + triples context
         entity_descriptions, metadata = (
-            self.entity_desc_generator.batch_generate_descriptions(
-                list(entities), passage
+            self.entity_desc_generator.batch_generate_descriptions_from_triplets(
+                entities=entities, triplets=triplets, passage=passage
             )
         )
 
