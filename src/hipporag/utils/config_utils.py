@@ -22,6 +22,18 @@ class BaseConfig:
             "help": "Base URL for the LLM model, if none, means using OPENAI service."
         },
     )
+    llm_api_key: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Explicit API key for OpenAI-compatible servers (e.g., 'EMPTY'). If not set, uses environment variable or rotation."
+        },
+    )
+    llm_extra_body: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Extra body forwarded to chat.completions.create (e.g., {'chat_template_kwargs': {'enable_thinking': False}})."
+        },
+    )
     embedding_base_url: str = field(
         default=None,
         metadata={
@@ -219,38 +231,6 @@ class BaseConfig:
     qa_top_k: int = field(
         default=5,
         metadata={"help": "Feeding top k documents to the QA model for reading."},
-    )
-
-    # Subgraph-PPR retrieval (experimental)
-    enable_subgraph_ppr: bool = field(
-        default=False,
-        metadata={
-            "help": "Enable subgraph-based PPR during retrieval instead of full-graph PPR."
-        },
-    )
-    subgraph_depth: int = field(
-        default=1,
-        metadata={"help": "BFS depth over entity-entity edges to expand subgraph."},
-    )
-    subgraph_top_k_entities: int = field(
-        default=10,
-        metadata={"help": "Number of top seed entities to start subgraph from."},
-    )
-    subgraph_top_k_chunks_per_entity: int = field(
-        default=10,
-        metadata={"help": "Limit chunk neighbors per entity in subgraph by DPR score."},
-    )
-    subgraph_weight_method: Literal["local", "global"] = field(
-        default="local",
-        metadata={
-            "help": "Edge weighting strategy on subgraph. 'local' = softmax per entity's outgoing edges."
-        },
-    )
-    subgraph_alpha: float = field(
-        default=0.5,
-        metadata={
-            "help": "Mixture weight for entity-chunk edge scores between pair-based and chunk DPR (approx)."
-        },
     )
 
     # API key rotation (e.g., OpenRouter free keys)

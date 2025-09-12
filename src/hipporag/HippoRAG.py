@@ -11,7 +11,6 @@ from transformers import HfArgumentParser
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 from igraph import Graph
-import networkx as nx
 import igraph as ig
 import numpy as np
 from collections import defaultdict
@@ -46,6 +45,8 @@ class HippoRAG:
         save_dir=None,
         llm_model_name=None,
         llm_base_url=None,
+        llm_api_key=None,
+        llm_extra_body=None,
         embedding_model_name=None,
         embedding_base_url=None,
         azure_endpoint=None,
@@ -104,6 +105,12 @@ class HippoRAG:
 
         if llm_base_url is not None:
             self.global_config.llm_base_url = llm_base_url
+
+        if llm_api_key is not None:
+            self.global_config.llm_api_key = llm_api_key
+
+        if llm_extra_body is not None:
+            self.global_config.llm_extra_body = llm_extra_body
 
         if embedding_base_url is not None:
             self.global_config.embedding_base_url = embedding_base_url
@@ -308,7 +315,7 @@ class HippoRAG:
             # Xử lý khác nhau tùy theo loại OpenIE
             if isinstance(self.openie, RevisedOpenIE):
                 # RevisedOpenIE trả về tuple (triplet_dict, entity_desc_pairs)
-                new_triple_results_dict, entity_desc_pairs, chunk_entities_map = self.openie.batch_openie(
+                new_triple_results_dict, entity_desc_pairs = self.openie.batch_openie(
                     new_openie_rows
                 )
 
@@ -316,22 +323,14 @@ class HippoRAG:
                 for chunk_id, row in new_openie_rows.items():
                     triplet_result = new_triple_results_dict.get(chunk_id)
                     if triplet_result:
-                        # Trích xuất entities từ triplet; nếu thiếu, fallback sang entity_desc
+                        # Trích xuất entities từ triplet
                         entities = set()
-                        has_triple_entities = False
                         for triplet in triplet_result.triples:
                             if len(triplet) >= 3:
-                                has_triple_entities = True
                                 if triplet[0]:
                                     entities.add(triplet[0])
                                 if triplet[2]:
                                     entities.add(triplet[2])
-                        if not has_triple_entities:
-                            # Fallback: dùng entities từ entity descriptions
-                            fallback_ents = chunk_entities_map.get(chunk_id, [])
-                            for e in fallback_ents:
-                                if e:
-                                    entities.add(e)
 
                         # Đảm bảo mối quan hệ entity-chunk được duy trì
                         # mặc dù không lưu triplet [entity, "appears_in", chunk_id]
@@ -377,30 +376,6 @@ class HippoRAG:
         entity_nodes, chunk_triple_entities = extract_entity_nodes(chunk_triples)
         facts = flatten_facts(chunk_triples)
 
-        # Fallback: if no triples, use NER entities to build entity lists and pseudo facts
-        if len(facts) == 0:
-            # Replace chunk_triple_entities with NER unique_entities per chunk
-            chunk_triple_entities = [
-                ner_results_dict.get(chunk_id, NerRawOutput(chunk_id, None, {}, [])).unique_entities
-                for chunk_id in chunk_ids
-            ]
-            # Recompute entity_nodes from fallback
-            entity_nodes = list({e for ents in chunk_triple_entities for e in ents})
-            # Build pseudo-facts so fact_embeddings are non-empty
-            pseudo = []
-            for chunk_id, ents in zip(chunk_ids, chunk_triple_entities):
-                for e in ents:
-                    if e:
-                        pseudo.append((e, "appears_in", chunk_id))
-            facts = flatten_facts([pseudo])
-        # Nếu không có triple nào (facts rỗng), tạo pseudo-facts từ (entity, appears_in, chunk)
-        if len(facts) == 0:
-            pseudo = []
-            for chunk_id, ents in zip(chunk_ids, chunk_triple_entities):
-                for e in ents:
-                    pseudo.append((e, "appears_in", chunk_id))
-            facts = flatten_facts([pseudo])
-
         logger.info(f"Encoding Entities")
         self.entity_embedding_store.insert_strings(entity_nodes)
 
@@ -413,17 +388,6 @@ class HippoRAG:
         self.ent_node_to_chunk_ids = {}
 
         self.add_fact_edges(chunk_ids, chunk_triples)
-
-        # Ensure ent_node_to_chunk_ids is populated even without triples
-        if all(len(ents) == 0 for ents in chunk_triple_entities):
-            pass  # nothing to link
-        else:
-            for idx, chunk_key in enumerate(chunk_ids):
-                for ent in chunk_triple_entities[idx]:
-                    node_key = compute_mdhash_id(ent, prefix="entity-")
-                    self.ent_node_to_chunk_ids[node_key] = self.ent_node_to_chunk_ids.get(
-                        node_key, set()
-                    ).union({chunk_key})
         num_new_chunks = self.add_passage_edges(chunk_ids, chunk_triple_entities)
 
         if num_new_chunks > 0:
@@ -596,36 +560,20 @@ class HippoRAG:
 
             self.rerank_time += rerank_end - rerank_start
 
-            use_subgraph = getattr(self.global_config, "enable_subgraph_ppr", False)
-            if use_subgraph:
-                sorted_doc_ids, sorted_doc_scores = self.graph_search_with_subgraph_ppr(
-                    query=query,
-                    passage_node_weight=self.global_config.passage_node_weight,
-                    top_k_entities=self.global_config.subgraph_top_k_entities,
-                    subgraph_depth=self.global_config.subgraph_depth,
-                    top_k_chunks_per_entity=self.global_config.subgraph_top_k_chunks_per_entity,
-                    weight_method=self.global_config.subgraph_weight_method,
-                    alpha=self.global_config.subgraph_alpha,
-                )
-                # Fallback to DPR if no results
-                if len(sorted_doc_ids) == 0:
-                    logger.info("Subgraph PPR returned no results, fallback to DPR")
-                    sorted_doc_ids, sorted_doc_scores = self.dense_passage_retrieval(query)
+            if len(top_k_facts) == 0:
+                logger.info("No facts found after reranking, return DPR results")
+                sorted_doc_ids, sorted_doc_scores = self.dense_passage_retrieval(query)
             else:
-                if len(top_k_facts) == 0:
-                    logger.info("No facts found after reranking, return DPR results")
-                    sorted_doc_ids, sorted_doc_scores = self.dense_passage_retrieval(query)
-                else:
-                    sorted_doc_ids, sorted_doc_scores = (
-                        self.graph_search_with_fact_entities(
-                            query=query,
-                            link_top_k=self.global_config.linking_top_k,
-                            query_fact_scores=query_fact_scores,
-                            top_k_facts=top_k_facts,
-                            top_k_fact_indices=top_k_fact_indices,
-                            passage_node_weight=self.global_config.passage_node_weight,
-                        )
+                sorted_doc_ids, sorted_doc_scores = (
+                    self.graph_search_with_fact_entities(
+                        query=query,
+                        link_top_k=self.global_config.linking_top_k,
+                        query_fact_scores=query_fact_scores,
+                        top_k_facts=top_k_facts,
+                        top_k_fact_indices=top_k_fact_indices,
+                        passage_node_weight=self.global_config.passage_node_weight,
                     )
+                )
 
             top_k_docs = [
                 self.chunk_embedding_store.get_row(self.passage_node_keys[idx])[
@@ -1788,232 +1736,6 @@ class HippoRAG:
         sorted_doc_ids = np.argsort(query_doc_scores)[::-1]
         sorted_doc_scores = query_doc_scores[sorted_doc_ids.tolist()]
         return sorted_doc_ids, sorted_doc_scores
-
-    def _score_entities_for_query(self, query: str, top_k: int) -> Tuple[List[str], Dict[str, float]]:
-        """
-        Score entity nodes against the query using the query_to_fact embedding and return
-        top_k entity node keys and a mapping key->normalized score.
-        """
-        if len(self.entity_node_keys) == 0:
-            return [], {}
-
-        # Ensure query embedding for facts exists
-        if "triple" not in self.query_to_embedding or query not in self.query_to_embedding["triple"]:
-            _ = self.get_query_embeddings([query])
-
-        query_embedding = self.query_to_embedding["triple"].get(query, None)
-        if query_embedding is None or len(self.entity_embeddings) == 0:
-            return [], {}
-
-        # Compute scores and normalize
-        scores = np.dot(self.entity_embeddings, query_embedding.T)
-        scores = np.squeeze(scores) if scores.ndim == 2 else scores
-        if scores.size == 0:
-            return [], {}
-        # Min-max normalize
-        smin, smax = float(scores.min()), float(scores.max())
-        if smax - smin <= 1e-12:
-            norm_scores = np.ones_like(scores)
-        else:
-            norm_scores = (scores - smin) / (smax - smin)
-
-        # Rank
-        sorted_idx = np.argsort(norm_scores)[::-1]
-        top_idx = sorted_idx[: top_k if top_k is not None else len(sorted_idx)]
-        top_keys = [self.entity_node_keys[i] for i in top_idx]
-        key2score = {self.entity_node_keys[i]: float(norm_scores[i]) for i in top_idx}
-        return top_keys, key2score
-
-    def _score_chunks_for_query(self, query: str) -> Dict[str, float]:
-        """
-        Return normalized DPR scores for all passages as a mapping from chunk node key to score.
-        """
-        if len(self.passage_node_keys) == 0:
-            return {}
-        sorted_doc_ids, sorted_doc_scores = self.dense_passage_retrieval(query)
-        # Normalize already performed in DPR; ensure mapping in node key space
-        id2score = {self.passage_node_keys[int(idx)]: float(score) for idx, score in zip(sorted_doc_ids.tolist(), sorted_doc_scores.tolist())}
-        return id2score
-
-    def graph_search_with_subgraph_ppr(
-        self,
-        query: str,
-        passage_node_weight: float,
-        top_k_entities: int,
-        subgraph_depth: int,
-        top_k_chunks_per_entity: int,
-        weight_method: str = "local",
-        alpha: float = 0.5,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Build a small NetworkX subgraph around top-K entity seeds and their top chunk neighbors,
-        assign edge weights (local softmax by default), and run Personalized PageRank with personalization
-        over entity/chunk priors to rank passages.
-        Returns arrays of passage indices and corresponding scores aligned with self.passage_node_keys.
-        """
-        # Preconditions
-        if not self.ready_to_retrieve:
-            self.prepare_retrieval_objects()
-
-        # Get seeds and scores
-        seed_entity_keys, entity_key2score = self._score_entities_for_query(query, top_k_entities)
-        chunk_key2score = self._score_chunks_for_query(query)
-
-        if len(seed_entity_keys) == 0:
-            return np.array([]), np.array([])
-
-        # Build subgraph
-        subg = nx.Graph()
-        # Add seed entities
-        for e in seed_entity_keys:
-            subg.add_node(e)
-
-        # BFS over entity-entity edges up to depth
-        # Build quick adjacency between entity nodes using self.node_to_node_stats keys
-        # Only consider entity-entity edges (both ids start with 'entity-')
-        entity_neighbors = {}
-        for (u, v), w in self.node_to_node_stats.items():
-            if isinstance(u, str) and isinstance(v, str) and u.startswith("entity-") and v.startswith("entity-"):
-                entity_neighbors.setdefault(u, set()).add(v)
-                entity_neighbors.setdefault(v, set()).add(u)
-
-        visited = set(seed_entity_keys)
-        frontier = list(seed_entity_keys)
-        for _ in range(max(0, int(subgraph_depth))):
-            next_frontier = []
-            for u in frontier:
-                for v in entity_neighbors.get(u, []):
-                    if v not in visited:
-                        visited.add(v)
-                        next_frontier.append(v)
-                        subg.add_node(v)
-                # Add edges among known visited neighbors
-            frontier = next_frontier
-
-        # Add EE edges among nodes in subgraph
-        nodes_in_subg = list(subg.nodes())
-        nodes_set = set(nodes_in_subg)
-        for (u, v), w in self.node_to_node_stats.items():
-            if u in nodes_set and v in nodes_set:
-                # Use stored weight; ensure >0
-                try:
-                    w_val = float(w)
-                except Exception:
-                    w_val = 1.0
-                if w_val <= 0:
-                    w_val = 1e-6
-                subg.add_edge(u, v, weight=w_val)
-
-        # Attach chunk neighbors to each entity, limited by top_k_chunks_per_entity using DPR chunk scores
-        for e in list(subg.nodes()):
-            if not isinstance(e, str) or not e.startswith("entity-"):
-                continue
-            chunk_ids = list(self.ent_node_to_chunk_ids.get(e, set())) if self.ent_node_to_chunk_ids is not None else []
-            # Score chunks by DPR score
-            scored = [(c, chunk_key2score.get(c, 0.0)) for c in chunk_ids]
-            scored.sort(key=lambda x: x[1], reverse=True)
-            for c, _s in scored[: max(1, int(top_k_chunks_per_entity))]:
-                subg.add_node(c)
-                subg.add_edge(e, c)
-
-        if subg.number_of_nodes() == 0:
-            return np.array([]), np.array([])
-
-        # Edge re-weighting
-        if weight_method == "local":
-            # For each entity node, softmax-normalize outgoing edge scores across EE and EC edges
-            entity_nodes = [n for n in subg.nodes() if isinstance(n, str) and n.startswith("entity-")]
-            for u in entity_nodes:
-                neighbors = list(subg.neighbors(u))
-                if len(neighbors) == 0:
-                    continue
-                raw_scores = []
-                edges = []
-                for v in neighbors:
-                    if isinstance(v, str) and v.startswith("entity-"):
-                        # EE edge score from original stats
-                        s = float(self.node_to_node_stats.get((u, v), self.node_to_node_stats.get((v, u), 0.0)))
-                    else:
-                        # EC edge score: hybrid between pair (presence=1 if connected) and DPR score of chunk
-                        s_pair = 1.0
-                        s_chunk = float(chunk_key2score.get(v, 0.0))
-                        s = alpha * s_pair + (1.0 - alpha) * s_chunk
-                    raw_scores.append(s)
-                    edges.append((u, v))
-                # Softmax
-                x = np.array(raw_scores, dtype=np.float64)
-                # Temperature could be added; keep 1.0
-                ex = np.exp(x - np.max(x)) if len(x) > 0 else x
-                denom = ex.sum() if len(x) > 0 else 1.0
-                weights = (ex / denom) if denom > 0 else np.full_like(ex, 1.0 / len(x))
-                for (src, dst), w in zip(edges, weights.tolist()):
-                    subg[src][dst]["weight"] = float(w) if w > 0 else 1e-6
-        else:
-            # Global assignment: use raw scores directly and softmax across all edges of same type
-            ee_edges, ee_scores = [], []
-            ec_edges, ec_scores = [], []
-            for u, v in subg.edges():
-                if (isinstance(u, str) and u.startswith("entity-")) and (isinstance(v, str) and v.startswith("entity-")):
-                    s = float(self.node_to_node_stats.get((u, v), self.node_to_node_stats.get((v, u), 0.0)))
-                    ee_edges.append((u, v))
-                    ee_scores.append(s)
-                else:
-                    entity_node = u if isinstance(u, str) and u.startswith("entity-") else v
-                    chunk_node = v if entity_node == u else u
-                    s_pair = 1.0
-                    s_chunk = float(chunk_key2score.get(chunk_node, 0.0))
-                    s = alpha * s_pair + (1.0 - alpha) * s_chunk
-                    ec_edges.append((u, v))
-                    ec_scores.append(s)
-            if ee_edges:
-                x = np.array(ee_scores, dtype=np.float64)
-                ex = np.exp(x - np.max(x))
-                w = ex / (ex.sum() if ex.sum() > 0 else 1.0)
-                for (src, dst), ww in zip(ee_edges, w.tolist()):
-                    subg[src][dst]["weight"] = float(ww) if ww > 0 else 1e-6
-            if ec_edges:
-                x = np.array(ec_scores, dtype=np.float64)
-                ex = np.exp(x - np.max(x))
-                w = ex / (ex.sum() if ex.sum() > 0 else 1.0)
-                for (src, dst), ww in zip(ec_edges, w.tolist()):
-                    subg[src][dst]["weight"] = float(ww) if ww > 0 else 1e-6
-
-        # Personalization vector
-        personalization = {}
-        for n in subg.nodes():
-            if isinstance(n, str) and n.startswith("entity-"):
-                personalization[n] = float(entity_key2score.get(n, 0.0))
-            else:
-                personalization[n] = float(chunk_key2score.get(n, 0.0)) * float(passage_node_weight)
-        # Normalize personalization to avoid zeros all around
-        total_p = sum(personalization.values())
-        if total_p <= 0:
-            # Default to uniform over entities
-            num = max(1, len([n for n in subg.nodes() if isinstance(n, str) and n.startswith("entity-")]))
-            for n in subg.nodes():
-                personalization[n] = 1.0 / num
-
-        # Map damping (igraph) to alpha (networkx)
-        alpha_nx = 1.0 - float(self.global_config.damping if self.global_config.damping is not None else 0.5)
-        try:
-            pr = nx.pagerank(subg, alpha=alpha_nx, personalization=personalization, max_iter=500, weight="weight")
-        except Exception as e:
-            logger.warning(f"NetworkX PageRank failed with error: {e}. Falling back to DPR.")
-            return np.array([]), np.array([])
-
-        # Collect ranked chunk nodes
-        chunk_nodes = [n for n in pr.keys() if isinstance(n, str) and n.startswith("chunk-")]
-        if not chunk_nodes:
-            return np.array([]), np.array([])
-        chunk_nodes.sort(key=lambda n: pr[n], reverse=True)
-
-        # Convert to passage indices and scores
-        key_to_idx = {k: i for i, k in enumerate(self.passage_node_keys)}
-        ranked_indices = [key_to_idx[c] for c in chunk_nodes if c in key_to_idx]
-        ranked_scores = [pr[c] for c in chunk_nodes if c in key_to_idx]
-        if len(ranked_indices) == 0:
-            return np.array([]), np.array([])
-        return np.array(ranked_indices, dtype=np.int64), np.array(ranked_scores, dtype=np.float32)
 
     def get_top_k_weights(
         self,

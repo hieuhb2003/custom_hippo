@@ -204,7 +204,11 @@ class CacheOpenAI(BaseLLM):
             if self.global_config.azure_endpoint is None:
                 return OpenAI(
                     base_url=self.llm_base_url,
-                    api_key=api_key,
+                    api_key=(
+                        self.global_config.llm_api_key
+                        if getattr(self.global_config, "llm_api_key", None) is not None
+                        else api_key
+                    ),
                     http_client=client,
                     max_retries=self.max_retries,
                 )
@@ -258,8 +262,6 @@ class CacheOpenAI(BaseLLM):
             "n": config_dict.get("num_gen_choices", 1),
             "seed": config_dict.get("seed", 0),
             "temperature": config_dict.get("temperature", 0.0),
-            # Prefer structured outputs when available to reduce parsing errors
-            "response_format": config_dict.get("response_format", None),
         }
 
         self.llm_config = LLMConfig.from_dict(config_dict=config_dict)
@@ -324,6 +326,9 @@ class CacheOpenAI(BaseLLM):
             self.openai_client = self._make_client(key)
 
         try:
+            # Attach extra body if provided in config
+            if getattr(self.global_config, "llm_extra_body", None):
+                params["extra_body"] = self.global_config.llm_extra_body
             response = self.openai_client.chat.completions.create(**params)
         except Exception as e:
             # on 401/429/5xx rotate and retry once
