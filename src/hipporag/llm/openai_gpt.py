@@ -258,6 +258,8 @@ class CacheOpenAI(BaseLLM):
             "n": config_dict.get("num_gen_choices", 1),
             "seed": config_dict.get("seed", 0),
             "temperature": config_dict.get("temperature", 0.0),
+            # Prefer structured outputs when available to reduce parsing errors
+            "response_format": config_dict.get("response_format", None),
         }
 
         self.llm_config = LLMConfig.from_dict(config_dict=config_dict)

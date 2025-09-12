@@ -1,0 +1,394 @@
+{
+  "meta": {
+    "input_file": "outputs/retrieved_datasets/longmemeval_0_500_v3.retrieved.json",
+    "ks": [
+      "3",
+      "5",
+      "10"
+    ],
+    "contain_threshold": 0.85,
+    "precision_mode": "ir",
+    "skipped_no_evidence": 0
+  },
+  "macro_avgs": {
+    "3": {
+      "precision": 0.2333333333333333,
+      "recall": 0.7,
+      "f1": 0.35,
+      "ndcg": 0.6261859507142915
+    },
+    "5": {
+      "precision": 0.13999999999999999,
+      "recall": 0.7,
+      "f1": 0.2333333333333334,
+      "ndcg": 0.6261859507142915
+    },
+    "10": {
+      "precision": 0.07999999999999999,
+      "recall": 0.8,
+      "f1": 0.14545454545454548,
+      "ndcg": 0.6595192840476248
+    }
+  },
+  "micro_avgs": {
+    "3": {
+      "precision": 0.23333333333333334,
+      "recall": 0.6363636363636364,
+      "f1": 0.34146341463414637,
+      "ndcg": 0.5890227526937845
+    },
+    "5": {
+      "precision": 0.14,
+      "recall": 0.6363636363636364,
+      "f1": 0.22950819672131148,
+      "ndcg": 0.5890227526937845
+    },
+    "10": {
+      "precision": 0.08,
+      "recall": 0.7272727272727273,
+      "f1": 0.14414414414414414,
+      "ndcg": 0.6203778026339225
+    }
+  },
+  "counts": {
+    "3": 10,
+    "5": 10,
+    "10": 10
+  },
+  "failed": [],
+  "per_record": {
+    "3": [
+      {
+        "idx": 0,
+        "question_id": "e47becba",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 1,
+        "question_id": "118b2229",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 2,
+        "question_id": "51a45a95",
+        "metrics": {
+          "precision": 0.3333333333333333,
+          "recall": 1.0,
+          "f1": 0.5,
+          "ndcg": 0.6309297535714575
+        }
+      },
+      {
+        "idx": 3,
+        "question_id": "58bf7951",
+        "metrics": {
+          "precision": 0.3333333333333333,
+          "recall": 1.0,
+          "f1": 0.5,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 4,
+        "question_id": "1e043500",
+        "metrics": {
+          "precision": 0.3333333333333333,
+          "recall": 1.0,
+          "f1": 0.5,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 5,
+        "question_id": "c5e8278d",
+        "metrics": {
+          "precision": 0.3333333333333333,
+          "recall": 1.0,
+          "f1": 0.5,
+          "ndcg": 0.6309297535714575
+        }
+      },
+      {
+        "idx": 6,
+        "question_id": "6ade9755",
+        "metrics": {
+          "precision": 0.3333333333333333,
+          "recall": 1.0,
+          "f1": 0.5,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 7,
+        "question_id": "6f9b354f",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 8,
+        "question_id": "58ef2f1c",
+        "metrics": {
+          "precision": 0.3333333333333333,
+          "recall": 1.0,
+          "f1": 0.5,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 9,
+        "question_id": "f8c5f88b",
+        "metrics": {
+          "precision": 0.3333333333333333,
+          "recall": 1.0,
+          "f1": 0.5,
+          "ndcg": 1.0
+        }
+      }
+    ],
+    "5": [
+      {
+        "idx": 0,
+        "question_id": "e47becba",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 1,
+        "question_id": "118b2229",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 2,
+        "question_id": "51a45a95",
+        "metrics": {
+          "precision": 0.2,
+          "recall": 1.0,
+          "f1": 0.33333333333333337,
+          "ndcg": 0.6309297535714575
+        }
+      },
+      {
+        "idx": 3,
+        "question_id": "58bf7951",
+        "metrics": {
+          "precision": 0.2,
+          "recall": 1.0,
+          "f1": 0.33333333333333337,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 4,
+        "question_id": "1e043500",
+        "metrics": {
+          "precision": 0.2,
+          "recall": 1.0,
+          "f1": 0.33333333333333337,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 5,
+        "question_id": "c5e8278d",
+        "metrics": {
+          "precision": 0.2,
+          "recall": 1.0,
+          "f1": 0.33333333333333337,
+          "ndcg": 0.6309297535714575
+        }
+      },
+      {
+        "idx": 6,
+        "question_id": "6ade9755",
+        "metrics": {
+          "precision": 0.2,
+          "recall": 1.0,
+          "f1": 0.33333333333333337,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 7,
+        "question_id": "6f9b354f",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 8,
+        "question_id": "58ef2f1c",
+        "metrics": {
+          "precision": 0.2,
+          "recall": 1.0,
+          "f1": 0.33333333333333337,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 9,
+        "question_id": "f8c5f88b",
+        "metrics": {
+          "precision": 0.2,
+          "recall": 1.0,
+          "f1": 0.33333333333333337,
+          "ndcg": 1.0
+        }
+      }
+    ],
+    "10": [
+      {
+        "idx": 0,
+        "question_id": "e47becba",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 1,
+        "question_id": "118b2229",
+        "metrics": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0,
+          "ndcg": 0.0
+        }
+      },
+      {
+        "idx": 2,
+        "question_id": "51a45a95",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 0.6309297535714575
+        }
+      },
+      {
+        "idx": 3,
+        "question_id": "58bf7951",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 4,
+        "question_id": "1e043500",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 5,
+        "question_id": "c5e8278d",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 0.6309297535714575
+        }
+      },
+      {
+        "idx": 6,
+        "question_id": "6ade9755",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 7,
+        "question_id": "6f9b354f",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 0.3333333333333333
+        }
+      },
+      {
+        "idx": 8,
+        "question_id": "58ef2f1c",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 1.0
+        }
+      },
+      {
+        "idx": 9,
+        "question_id": "f8c5f88b",
+        "metrics": {
+          "precision": 0.1,
+          "recall": 1.0,
+          "f1": 0.18181818181818182,
+          "ndcg": 1.0
+        }
+      }
+    ]
+  },
+  "micro_sums": {
+    "3": {
+      "tp_evidence": 7.0,
+      "retrieved": 30.0,
+      "gold": 11.0,
+      "rel_chunks": 7.0,
+      "dcg": 6.2618595071429155,
+      "idcg": 10.630929753571458
+    },
+    "5": {
+      "tp_evidence": 7.0,
+      "retrieved": 50.0,
+      "gold": 11.0,
+      "rel_chunks": 7.0,
+      "dcg": 6.2618595071429155,
+      "idcg": 10.630929753571458
+    },
+    "10": {
+      "tp_evidence": 8.0,
+      "retrieved": 100.0,
+      "gold": 11.0,
+      "rel_chunks": 8.0,
+      "dcg": 6.5951928404762485,
+      "idcg": 10.630929753571458
+    }
+  },
+  "skipped_no_evidence": []
+}

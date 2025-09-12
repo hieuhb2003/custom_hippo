@@ -49,6 +49,7 @@ class RevisedOpenIE:
         messages = self.prompt_template_manager.render(
             name="direct_triple_extraction", passage=passage
         )
+        # Call LLM (no enforced response_format to avoid provider 400 errors)
         raw_response, metadata, cache_hit = self.llm_model.infer(messages=messages)
 
         # Parse triplets from response
@@ -56,23 +57,40 @@ class RevisedOpenIE:
             import re, ast
 
             def _extract_triples_from_response(real_response: str):
+                # 1) Try JSON parse first
+                try:
+                    obj = json.loads(real_response)
+                    triples = obj.get("triples", [])
+                    if isinstance(triples, list):
+                        return triples
+                except Exception:
+                    pass
+
+                # 2) Try to find a JSON object containing triples field
                 pattern = r'\{[^{}]*"triples"\s*:\s*\[[^\]]*\][^{}]*\}'
                 match = re.search(pattern, real_response, re.DOTALL)
-                if match is None:
-                    # Fallback: try to find any list-of-lists looking like triples
-                    bracket_block = re.findall(r"\[[\s\S]*?\]", real_response)
-                    for block in bracket_block:
-                        try:
-                            val = ast.literal_eval(block)
-                            if isinstance(val, list) and all(
-                                isinstance(x, (list, tuple)) and len(x) >= 3
-                                for x in val
-                            ):
-                                return val
-                        except Exception:
-                            continue
-                    return []
-                return eval(match.group())["triples"]
+                if match is not None:
+                    try:
+                        obj2 = json.loads(match.group())
+                        triples = obj2.get("triples", [])
+                        if isinstance(triples, list):
+                            return triples
+                    except Exception:
+                        pass
+
+                # 3) Fallback: detect any list-of-lists that looks like triples
+                bracket_block = re.findall(r"\[[\s\S]*?\]", real_response)
+                for block in bracket_block:
+                    try:
+                        val = ast.literal_eval(block)
+                        if isinstance(val, list) and all(
+                            isinstance(x, (list, tuple)) and len(x) >= 3
+                            for x in val
+                        ):
+                            return val
+                    except Exception:
+                        continue
+                return []
 
             # Repair broken JSON if needed
             real_response = (
@@ -143,9 +161,9 @@ class RevisedOpenIE:
         # Extract triplets first
         triplets_output = self.extract_triplets(chunk_id=chunk_id, passage=passage)
 
-        # Generate entity descriptions based on triplets
+        # Generate entity descriptions; if no triples, still generate from passage context
         entity_desc_output = self.generate_entity_descriptions(
-            chunk_id=chunk_id, triplets=triplets_output.triples, passage=passage
+            chunk_id=chunk_id, triplets=triplets_output.triples or [], passage=passage
         )
 
         # Generate entity+description pairs for embedding
@@ -184,7 +202,7 @@ class RevisedOpenIE:
 
     def batch_openie(
         self, chunks: Dict[str, "ChunkInfo"]
-    ) -> Tuple[Dict[str, TripleRawOutput], List[str]]:
+    ) -> Tuple[Dict[str, TripleRawOutput], List[str], Dict[str, List[str]]]:
         """
         Process multiple chunks in parallel.
 
@@ -283,6 +301,8 @@ class RevisedOpenIE:
         final_triplet_results = {}
         # Collect all entity+description pairs for embedding
         all_entity_desc_pairs = []
+        # Map chunk -> entity list (from entity descriptions) for robust fallback
+        chunk_entities_map: Dict[str, List[str]] = {}
 
         for chunk_id, triplet_output in triplet_results_dict.items():
             entity_desc_output = entity_desc_results_dict.get(chunk_id)
@@ -302,6 +322,9 @@ class RevisedOpenIE:
                 # Collect entity+description pairs for embedding
                 all_entity_desc_pairs.extend(entity_desc_pairs)
 
+                # Save pure entity list for this chunk (fallback when triples sparse)
+                chunk_entities_map[chunk_id] = list(entity_desc_output.entity_descriptions.keys())
+
                 # Use original triplets only - no need to add entity-chunk triplets
                 all_triplets = triplet_output.triples
 
@@ -316,4 +339,4 @@ class RevisedOpenIE:
                 # If no entity descriptions, use original triplets
                 final_triplet_results[chunk_id] = triplet_output
 
-        return final_triplet_results, all_entity_desc_pairs
+        return final_triplet_results, all_entity_desc_pairs, chunk_entities_map

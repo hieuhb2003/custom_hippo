@@ -4,6 +4,9 @@ from multiprocessing import freeze_support
 from src.hipporag.utils.config_utils import BaseConfig
 
 cfg = BaseConfig()
+cfg.llm_base_url = "https://openrouter.ai/api/v1"
+cfg.llm_name = "openai/gpt-4o-mini"  # hoặc model trả phí khác trên OpenRouter, ví dụ: "anthropic/claude-3.5-sonnet"
+cfg.enable_api_key_rotation = False
 cfg.enable_chunking = True
 cfg.chunk_tokens = 800
 cfg.chunk_overlap_tokens = 200
