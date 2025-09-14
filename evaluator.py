@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover
     tqdm = None
 
 METRIC_KEYS = ["precision", "recall", "f1", "ndcg"]
-DEFAULT_OUT_DIR = "eval_results"
+DEFAULT_OUT_DIR = "/home/hungpv/projects/conversation_magix/eval_results"
 ALL_K_SENTINEL = 10**9  # dùng làm key cho @ALL
 
 
@@ -80,7 +80,7 @@ def _coerce_evidences(item: Dict[str, Any]) -> List[str]:
 
 
 def _has_evidence(item: Dict[str, Any]) -> bool:
-    return False if not item.get('evidences',[]) else True
+    return bool(_coerce_evidences(item))
 
 
 def _parse_ks(ks_str: str) -> Tuple[Tuple[int, ...], bool]:
@@ -131,7 +131,9 @@ def _evaluate_counts(
     tp_ev = float(len(hit_evs))
     retrieved = float(len(chunks_n))
     gold = float(len(evidences_n))
-    ideal_hits = int(min(gold, retrieved))
+    # IDCG dựa trên số chunk liên quan tối đa có thể xếp ở top (<= retrieved),
+    # dùng rel_chunk_count để tránh nDCG > 1 khi số chunk liên quan > số evidence
+    ideal_hits = int(min(rel_chunk_count, int(retrieved)))
     idcg = sum(1.0 / math.log2(i + 1) for i in range(1, ideal_hits + 1)) if ideal_hits else 0.0
 
     return {
@@ -550,9 +552,25 @@ if __name__ == "__main__":
     main()
 
 """
-python /home/hungpv/projects/draft/nanographrag/eval_magix.py \
-  --input /home/hungpv/projects/conversation_magix/eval_results/longmemeval_0_500_user_turn_level.json \
+python /home/hungpv/projects/custom_hippo/evaluator.py \
+  --input /home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.hippo.json \
   --ks all,3,5,10 \
   --precision-mode ir \
   --contain-threshold 0.5
+python /home/hungpv/projects/custom_hippo/evaluator.py \
+  --input /home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.retrieved.json \
+  --ks all,3,5,10 \
+  --precision-mode ir \
+  --contain-threshold 0.5
+python /home/hungpv/projects/custom_hippo/evaluator.py \
+  --input /home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.magix.json \
+  --ks all,3,5,10 \
+  --precision-mode ir \
+  --contain-threshold 0.5
+python /home/hungpv/projects/custom_hippo/evaluator.py \
+  --input /home/hungpv/projects/custom_hippo/longmemeval_0_500_v3.json \
+  --ks all,3,5,10 \
+  --precision-mode ir \
+  --contain-threshold 0.5
+
 """

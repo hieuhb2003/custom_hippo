@@ -34,13 +34,15 @@ def main():
     parser.add_argument("--c", type=float, default=0.5)
     parser.add_argument("--relevance_threshold", type=float, default=0.7)
     parser.add_argument("--method", choices=["max", "max_top_k", "new_function", "weighted"], default="weighted")
+    parser.add_argument("--max_docs", type=int, default=None)
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
 
     with open(args.input, "r", encoding="utf-8") as f:
         dataset: List[Dict[str, Any]] = json.load(f)
-        dataset = dataset[:10]
+        # if args.max_docs is not None:
+        #     dataset = dataset[: max(0, int(args.max_docs))]
 
     # Reuse HippoRAG for indexing embeddings; retrieval will be handled by magix_retrieval
     all_docs: List[str] = []
@@ -58,11 +60,11 @@ def main():
         save_dir=args.save_dir,
         llm_name=args.llm,
         embedding_model_name=args.embedding,
-        enable_subgraph_ppr=False,
     )
 
     hippo = HippoRAG(global_config=cfg)
-    hippo.index(unique_docs)
+    # Only build chunk embeddings to avoid OpenIE/LLM calls
+    hippo.chunk_embedding_store.insert_strings(unique_docs)
 
     # Build dataset via MAGIX retrieval
     new_dataset: List[Dict[str, Any]] = []
@@ -85,10 +87,12 @@ def main():
 
     class _ChunksVDB:
         def query(self, query_embedding, top_k, filter_lambda=None):
-            # Brute-force over hippo passages
+            # Brute-force over stored chunk embeddings
             import numpy as np
-            ids = hippo.passage_node_keys
-            embs = hippo.passage_embeddings
+            ids = hippo.chunk_embedding_store.get_all_ids()
+            if not ids:
+                return []
+            embs = hippo.chunk_embedding_store.get_embeddings(ids)
             sims = embs @ query_embedding.reshape(-1, 1)
             sims = np.squeeze(sims)
             order = np.argsort(sims)[::-1]
@@ -119,7 +123,7 @@ def main():
         try:
             corpus_ids = enhanced_chunk_retrieval_direct(
                 query=q,
-                full_graph=None,  # not needed in dummy path
+                full_graph=None,
                 entities_vdb=entities_vdb,
                 relationships_vdb=relationships_vdb,
                 text_chunks_db=text_chunks_db,
@@ -159,3 +163,15 @@ if __name__ == "__main__":
     main()
 
 
+"""
+python /home/hungpv/projects/custom_hippo/test_magix.py \
+  --input /home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.magix.json \
+  --output outputs/retrieved_datasets/longmemeval_0_500_v3.magix.json \
+  --top_k 10 \
+  --llm "Qwen/Qwen3-8B" \
+  --embedding "BAAI/bge-m3" \
+  --save_dir outputs/magix_build \
+  --a 0.3 --b 0.5 --c 0.5 \
+  --relevance_threshold 0.7 \
+  --method weighted
+"""

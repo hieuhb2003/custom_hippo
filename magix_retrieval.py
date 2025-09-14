@@ -1,3 +1,12 @@
+from typing import Any, Dict, List
+import numpy as np
+import math
+from collections import defaultdict
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def calculate_similarity(vec1, vec2):
     """Tính toán cosine similarity giữa hai vector."""
     vec1 = np.squeeze(vec1)
@@ -188,7 +197,13 @@ def retrieve_and_score_chunks(
     if missing_chunks:
         logger.info(f"Calculating similarity for {len(missing_chunks)} missing chunks manually.")
         try:
-            missing_embeddings =  [model.encode(chunk_contents[cid])['dense_vecs'] for cid in missing_chunks]
+            if hasattr(model, "batch_encode"):
+                missing_embeddings = model.batch_encode([chunk_contents[cid] for cid in missing_chunks])
+            else:
+                out = model.encode([chunk_contents[cid] for cid in missing_chunks])
+                if hasattr(out, "cpu"):
+                    out = out.cpu().numpy()
+                missing_embeddings = out
             for i, chunk_id in enumerate(missing_chunks):
                 chunk_sim_scores[chunk_id] = calculate_similarity(query_embedding, missing_embeddings[i])
         except Exception as e:
@@ -255,7 +270,27 @@ def enhanced_chunk_retrieval_direct(
     Synchronous version aligned with async variant. If method is None,
     falls back to weighted sum on normalized scores.
     """
-    query_embedding = model.encode(query)["dense_vecs"]
+    def _encode_single(text: str):
+        try:
+            if hasattr(model, "batch_encode"):
+                arr = model.batch_encode([text])
+                return arr[0]
+            else:
+                out = model.encode([text])
+                if hasattr(out, "cpu"):
+                    out = out.cpu().numpy()
+                return out[0] if getattr(out, "ndim", 1) != 1 else out
+        except Exception as e:
+            logger.error(f"Failed to encode text: {e}")
+            raise
+
+    query_embedding = _encode_single(query)
+
+    # Fast path: DPR-only when both entity/edge retrieval are disabled
+    if top_k_entities == 0 and top_k_edges == 0:
+        vdb_results = chunks_vdb.query(query_embedding, top_k=top_k_chunks)
+        top_chunk_ids = [r.get("__id__") for r in vdb_results if r.get("__id__")]
+        return process_chunk_id_results(top_chunk_ids, chunk_id_to_doc_id, doc_id_to_doc_content, doc_content_to_doc_idx, top_k=top_k_chunks)
 
     # --- entities
     top_entities, entity_similarities, entity_info, top_entities_similarities = retrieve_entities_and_similarities(

@@ -1,6 +1,6 @@
 {
   "meta": {
-    "input_file": "/home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.retrieved.json",
+    "input_file": "/home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.magix.json",
     "ks": [
       "3",
       "5",

@@ -314,10 +314,16 @@ class HippoRAG:
         if len(chunk_keys_to_process) > 0:
             # Xử lý khác nhau tùy theo loại OpenIE
             if isinstance(self.openie, RevisedOpenIE):
-                # RevisedOpenIE trả về tuple (triplet_dict, entity_desc_pairs)
-                new_triple_results_dict, entity_desc_pairs = self.openie.batch_openie(
-                    new_openie_rows
-                )
+                # RevisedOpenIE should return (triplet_dict, entity_desc_pairs),
+                # but be tolerant if additional values are returned.
+                _openie_result = self.openie.batch_openie(new_openie_rows)
+                if isinstance(_openie_result, tuple):
+                    if len(_openie_result) >= 2:
+                        new_triple_results_dict, entity_desc_pairs = _openie_result[0], _openie_result[1]
+                    else:
+                        raise ValueError("RevisedOpenIE.batch_openie returned less than 2 values")
+                else:
+                    raise TypeError("RevisedOpenIE.batch_openie did not return a tuple")
 
                 # Tạo các thông tin openie từ triplet
                 for chunk_id, row in new_openie_rows.items():
@@ -1547,6 +1553,35 @@ class HippoRAG:
         )
 
         all_openie_info, chunk_keys_to_process = self.load_existing_openie([])
+
+        # Backfill entity embeddings from OpenIE if store is empty
+        try:
+            if len(self.entity_node_keys) == 0 and len(all_openie_info) > 0:
+                unique_entities = set()
+                for doc in all_openie_info:
+                    # prefer triples to ensure subject/object pairs
+                    for t in doc.get("extracted_triples", []) or []:
+                        if isinstance(t, (list, tuple)) and len(t) >= 3:
+                            if isinstance(t[0], str) and t[0].strip():
+                                unique_entities.add(t[0])
+                            if isinstance(t[2], str) and t[2].strip():
+                                unique_entities.add(t[2])
+                    # also include extracted_entities if present
+                    for e in doc.get("extracted_entities", []) or []:
+                        if isinstance(e, str) and e.strip():
+                            unique_entities.add(e)
+
+                if unique_entities:
+                    logger.info(
+                        f"Backfilling entity embeddings from OpenIE ({len(unique_entities)} entities)."
+                    )
+                    self.entity_embedding_store.insert_strings(list(unique_entities))
+                    self.entity_node_keys = list(self.entity_embedding_store.get_all_ids())
+                    self.entity_embeddings = np.array(
+                        self.entity_embedding_store.get_embeddings(self.entity_node_keys)
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to backfill entity embeddings: {e}")
 
         self.proc_triples_to_docs = {}
 
