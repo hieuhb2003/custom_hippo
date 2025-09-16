@@ -1,4 +1,5 @@
 import logging
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Any, Tuple, TypedDict
 
@@ -125,7 +126,7 @@ class RevisedOpenIE:
         Returns:
             EntityDescriptionOutput: Entity descriptions with metadata
         """
-        # Extract unique entities from triplets
+        # Extract unique entities from triplets; fallback to simple heuristic from passage if empty
         entities = set()
         for triplet in triplets:
             if len(triplet) >= 3:
@@ -133,6 +134,23 @@ class RevisedOpenIE:
                     entities.add(triplet[0])
                 if triplet[2]:  # Object
                     entities.add(triplet[2])
+
+        if not entities and isinstance(passage, str):
+            try:
+                import re
+                tokens = re.findall(r"[A-Za-z]+", passage)
+                # title-case unigrams/bigrams as crude entity candidates
+                candidates = []
+                for i, tok in enumerate(tokens):
+                    if tok[:1].isupper() and len(tok) > 2:
+                        candidates.append(tok)
+                        if i + 1 < len(tokens) and tokens[i + 1][:1].isupper():
+                            candidates.append(tok + " " + tokens[i + 1])
+                # keep top N unique
+                for cand in candidates[:20]:
+                    entities.add(cand)
+            except Exception as e:
+                logger.debug(f"Heuristic entity extraction failed: {e}")
 
         # Generate descriptions for the entities in ONE call using passage + triples context
         entity_descriptions, metadata = (

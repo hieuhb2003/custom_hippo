@@ -34,6 +34,7 @@ from .utils.embed_utils import retrieve_knn
 from .utils.typing import Triple
 from .utils.config_utils import BaseConfig
 from .utils.chunking import DocumentChunker
+from magix_retrieval import enhanced_chunk_retrieval_direct
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +250,7 @@ class HippoRAG:
         )
         new_openie_rows = {k: chunks[k] for k in chunk_keys_to_process}
 
+        seed_ent_to_chunks = {}
         if len(chunk_keys_to_process) > 0:
             new_ner_results_dict, new_triple_results_dict = self.openie.batch_openie(
                 new_openie_rows
@@ -311,6 +313,9 @@ class HippoRAG:
         )
         new_openie_rows = {k: chunk_to_rows[k] for k in chunk_keys_to_process}
 
+        # Seed map for entity->chunk links aggregated from multiple sources
+        seed_ent_to_chunks: Dict[str, set] = {}
+
         if len(chunk_keys_to_process) > 0:
             # Xử lý khác nhau tùy theo loại OpenIE
             if isinstance(self.openie, RevisedOpenIE):
@@ -318,8 +323,11 @@ class HippoRAG:
                 # but be tolerant if additional values are returned.
                 _openie_result = self.openie.batch_openie(new_openie_rows)
                 if isinstance(_openie_result, tuple):
-                    if len(_openie_result) >= 2:
+                    if len(_openie_result) >= 3:
+                        new_triple_results_dict, entity_desc_pairs, chunk_entities_map = _openie_result[0], _openie_result[1], _openie_result[2]
+                    elif len(_openie_result) == 2:
                         new_triple_results_dict, entity_desc_pairs = _openie_result[0], _openie_result[1]
+                        chunk_entities_map = {}
                     else:
                         raise ValueError("RevisedOpenIE.batch_openie returned less than 2 values")
                 else:
@@ -330,7 +338,7 @@ class HippoRAG:
                     triplet_result = new_triple_results_dict.get(chunk_id)
                     if triplet_result:
                         # Trích xuất entities từ triplet
-                        entities = set()
+                        entities = set(chunk_entities_map.get(chunk_id, []))
                         for triplet in triplet_result.triples:
                             if len(triplet) >= 3:
                                 if triplet[0]:
@@ -352,7 +360,54 @@ class HippoRAG:
 
                 # Lưu entity+description pairs vào entity_embedding_store
                 if entity_desc_pairs:
-                    self.entity_embedding_store.insert_strings(entity_desc_pairs)
+                    # entity_desc_pairs may be list[str], list[tuple(entity, desc)], or dict{entity: desc}
+                    try:
+                        if isinstance(entity_desc_pairs, dict):
+                            entity_texts = list(entity_desc_pairs.keys())
+                        elif isinstance(entity_desc_pairs, (list, tuple)):
+                            if all(isinstance(x, str) for x in entity_desc_pairs):
+                                # split "entity: description" to pure entity if possible
+                                entity_texts = [x.split(":", 1)[0].strip() for x in entity_desc_pairs]
+                            elif all(isinstance(x, (list, tuple)) and len(x) >= 1 and isinstance(x[0], str) for x in entity_desc_pairs):
+                                entity_texts = [x[0] for x in entity_desc_pairs]
+                            else:
+                                entity_texts = []
+                        else:
+                            entity_texts = []
+
+                        if entity_texts:
+                            logger.info(f"Encoding {len(entity_texts)} entities from descriptions.")
+                            self.entity_embedding_store.insert_strings(entity_texts)
+
+                            # Build basic entity->chunk mapping via substring match to strengthen Magix path when triples are sparse
+                            try:
+                                tmp_map = defaultdict(set)
+                                for chunk_id, row in chunk_to_rows.items():
+                                    passage = row.get("content", "") or ""
+                                    for ent in entity_texts:
+                                        if isinstance(ent, str) and ent and ent in passage:
+                                            ent_key = compute_mdhash_id(ent, prefix="entity-")
+                                            tmp_map[ent_key].add(chunk_id)
+                                # keep for merging after graph edges are added
+                                for k, v in tmp_map.items():
+                                    seed_ent_to_chunks.setdefault(k, set()).update(v)
+                                logger.info(f"Prepared substring-based entity->chunk seeds: {len(tmp_map)} entities.")
+                            except Exception as e:
+                                logger.warning(f"Failed to build substring-based entity->chunk mapping: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to process entity_desc_pairs: {e}")
+
+                # Also merge chunk_entities_map seeds (entity names directly from descriptions)
+                try:
+                    if chunk_entities_map:
+                        for chunk_id, ents in chunk_entities_map.items():
+                            for ent in ents or []:
+                                if isinstance(ent, str) and ent.strip():
+                                    ent_key = compute_mdhash_id(ent, prefix="entity-")
+                                    seed_ent_to_chunks.setdefault(ent_key, set()).add(chunk_id)
+                        logger.info(f"Prepared description-based entity->chunk seeds: {len(seed_ent_to_chunks)} entities.")
+                except Exception as e:
+                    logger.warning(f"Failed to build description-based seeds: {e}")
             else:
                 # Phương thức cũ
                 new_ner_results_dict, new_triple_results_dict = (
@@ -394,6 +449,11 @@ class HippoRAG:
         self.ent_node_to_chunk_ids = {}
 
         self.add_fact_edges(chunk_ids, chunk_triples)
+        # Merge seed entity->chunk mapping after adding fact edges
+        if seed_ent_to_chunks:
+            for k, v in seed_ent_to_chunks.items():
+                self.ent_node_to_chunk_ids[k] = self.ent_node_to_chunk_ids.get(k, set()).union(v)
+            logger.info(f"Merged seed entity->chunk mapping, total entities: {len(self.ent_node_to_chunk_ids)}")
         num_new_chunks = self.add_passage_edges(chunk_ids, chunk_triple_entities)
 
         if num_new_chunks > 0:
@@ -711,6 +771,361 @@ class HippoRAG:
             logger.info(f"Evaluation results for QA: {overall_qa_results}")
 
             # Save retrieval and QA results
+            for idx, q in enumerate(queries_solutions):
+                q.gold_answers = list(gold_answers[idx])
+                if gold_docs is not None:
+                    q.gold_docs = gold_docs[idx]
+
+            return (
+                queries_solutions,
+                all_response_message,
+                all_metadata,
+                overall_retrieval_result,
+                overall_qa_results,
+            )
+        else:
+            return queries_solutions, all_response_message, all_metadata
+
+    def retrieve_magix(
+        self,
+        queries: List[str],
+        num_to_retrieve: int = None,
+        gold_docs: List[List[str]] = None,
+        *,
+        top_k_entities: int | None = None,
+        top_k_edges: int | None = None,
+        top_k_chunks: int | None = None,
+        a: float = 0.3,
+        b: float = 0.5,
+        c: float = 0.5,
+        relevance_threshold: float = 0.7,
+        method: str | None = None,
+        allow_dpr_fallback: bool = False,
+    ) -> List[QuerySolution] | Tuple[List[QuerySolution], Dict]:
+        """
+        Retrieval using Magix-style entity/edge→chunk fusion over Hippo storage via lightweight adapters.
+        Returns QuerySolution compatible with existing flows.
+        """
+        retrieve_start_time = time.time()
+
+        if num_to_retrieve is None:
+            num_to_retrieve = self.global_config.retrieval_top_k
+
+        if top_k_entities is None:
+            top_k_entities = getattr(self.global_config, "linking_top_k", 100)
+        if top_k_edges is None:
+            top_k_edges = getattr(self.global_config, "linking_top_k", 100)
+        if top_k_chunks is None:
+            top_k_chunks = num_to_retrieve
+
+        if gold_docs is not None:
+            retrieval_recall_evaluator = RetrievalRecall(global_config=self.global_config)
+
+        if not self.ready_to_retrieve:
+            self.prepare_retrieval_objects()
+
+        # Local adapters to bridge Hippo stores to Magix interfaces
+        class EntitiesVDBAdapter:
+            def __init__(self, keys, embs, id_to_row):
+                self._keys = keys
+                self._embs = np.array(embs, dtype=np.float32)
+                self._id_to_row = id_to_row
+
+            def query(self, query_embedding, top_k=1000000, filter_lambda=None):
+                if self._embs.size == 0:
+                    return []
+                q = np.squeeze(query_embedding)
+                scores = self._embs @ q
+                idxs = np.argsort(scores)[::-1]
+                results = []
+                for i in idxs[:top_k]:
+                    eid = self._keys[i]
+                    # Use hash id as entity_name for graph adapter compatibility
+                    row = self._id_to_row.get(eid, {"content": ""})
+                    item = {"__id__": eid, "entity_name": eid, "description": row.get("content", ""), "score": float(scores[i])}
+                    if filter_lambda is None or filter_lambda(item):
+                        results.append(item)
+                return results
+
+        class RelationshipsVDBAdapter:
+            def __init__(self, keys, embs, id_to_row):
+                self._keys = keys
+                self._embs = np.array(embs, dtype=np.float32)
+                self._id_to_row = id_to_row
+
+            def _parse_triple(self, content):
+                try:
+                    t = eval(content)
+                    if isinstance(t, (list, tuple)) and len(t) >= 3:
+                        return str(t[0]), str(t[1]), str(t[2])
+                except Exception:
+                    return "", "", ""
+                return "", "", ""
+
+            def query(self, query_embedding, top_k=1000000, filter_lambda=None):
+                if self._embs.size == 0:
+                    return []
+                q = np.squeeze(query_embedding)
+                scores = self._embs @ q
+                idxs = np.argsort(scores)[::-1]
+                results = []
+                for i in idxs[:top_k]:
+                    rid = self._keys[i]
+                    row = self._id_to_row.get(rid, {"content": ""})
+                    s, p, o = self._parse_triple(row.get("content", ""))
+                    src_id = compute_mdhash_id(s, prefix="entity-") if s else ""
+                    tgt_id = compute_mdhash_id(o, prefix="entity-") if o else ""
+                    item = {
+                        "__id__": rid,
+                        "src_id": src_id,
+                        "tgt_id": tgt_id,
+                        "description": p,
+                        "score": float(scores[i]),
+                    }
+                    if filter_lambda is None or filter_lambda(item):
+                        results.append(item)
+                return results
+
+        class ChunksVDBAdapter:
+            def __init__(self, keys, embs):
+                self._keys = keys
+                self._embs = np.array(embs, dtype=np.float32)
+
+            def query(self, query_embedding, top_k=1000000, filter_lambda=None):
+                if self._embs.size == 0:
+                    return []
+                q = np.squeeze(query_embedding)
+                scores = self._embs @ q
+                idxs = np.argsort(scores)[::-1]
+                results = []
+                for i in idxs:
+                    cid = self._keys[i]
+                    item = {"__id__": cid, "score": float(scores[i])}
+                    if filter_lambda is None or filter_lambda(item):
+                        results.append(item)
+                    if len(results) >= top_k:
+                        break
+                return results
+
+        class TextChunksDBAdapter:
+            def __init__(self, id_to_row):
+                self._id_to_row = id_to_row
+
+            def __getitem__(self, key):
+                return self._id_to_row[key]
+
+        class GraphAdapter:
+            def __init__(self, ent_to_chunks, node_name_to_idx):
+                self._ent_to_chunks = ent_to_chunks
+                self._node_map = node_name_to_idx
+
+            def has_node(self, name):
+                return name in self._ent_to_chunks
+
+            @property
+            def nodes(self):
+                class NodesDict(dict):
+                    def __init__(self, ent_to_chunks):
+                        super().__init__()
+                        self._ent_to_chunks = ent_to_chunks
+
+                    def __getitem__(self, name):
+                        chunks = list(self._ent_to_chunks.get(name, set()))
+                        return {"source_id": "<SEP>".join(chunks)}
+
+                return NodesDict(self._ent_to_chunks)
+
+            def has_edge(self, src, tgt):
+                return src in self._ent_to_chunks and tgt in self._ent_to_chunks
+
+            @property
+            def edges(self):
+                class EdgesDict(dict):
+                    def __init__(self, ent_to_chunks):
+                        super().__init__()
+                        self._ent_to_chunks = ent_to_chunks
+
+                    def __getitem__(self, key):
+                        src, tgt = key
+                        chunks_src = self._ent_to_chunks.get(src, set())
+                        chunks_tgt = self._ent_to_chunks.get(tgt, set())
+                        inter = list(chunks_src.intersection(chunks_tgt))
+                        return {"source_id": "<SEP>".join(inter)}
+
+                return EdgesDict(self._ent_to_chunks)
+
+        # Build static adapters upon current stores
+        entity_id_to_row = self.entity_embedding_store.get_all_id_to_rows()
+        fact_id_to_row = self.fact_embedding_store.get_all_id_to_rows()
+        chunk_id_to_row = self.chunk_embedding_store.get_all_id_to_rows()
+
+        ent_vdb = EntitiesVDBAdapter(self.entity_node_keys, self.entity_embeddings, entity_id_to_row)
+        rel_vdb = RelationshipsVDBAdapter(self.fact_node_keys, self.fact_embeddings, fact_id_to_row)
+        ch_vdb = ChunksVDBAdapter(self.passage_node_keys, self.passage_embeddings)
+        text_db = TextChunksDBAdapter(chunk_id_to_row)
+        # Build entity->chunk map; if empty (e.g., no triples), derive from NER entities
+        ent_to_chunks = self.ent_node_to_chunk_ids or {}
+        if not ent_to_chunks:
+            try:
+                all_openie_info, _ = self.load_existing_openie([])
+                ner_results_dict, _ = reformat_openie_results(all_openie_info)
+                tmp_map = defaultdict(set)
+                for chunk_id, ner_row in ner_results_dict.items():
+                    for ent in ner_row.unique_entities or []:
+                        if isinstance(ent, str) and ent.strip():
+                            ent_key = compute_mdhash_id(ent, prefix="entity-")
+                            tmp_map[ent_key].add(chunk_id)
+                ent_to_chunks = {k: set(v) for k, v in tmp_map.items()}
+                if not ent_to_chunks:
+                    logger.warning("NER-based entity->chunk mapping is empty; Magix may return no results.")
+            except Exception as e:
+                logger.warning(f"Failed to build NER-based entity->chunk mapping: {e}")
+                ent_to_chunks = {}
+
+        graph_adapter = GraphAdapter(ent_to_chunks, self.node_name_to_vertex_idx)
+
+        # Build mappings for Magix post-processing
+        chunk_id_to_doc_id = {cid: cid for cid in self.passage_node_keys}
+        doc_id_to_doc_content = {cid: chunk_id_to_row[cid]["content"] for cid in self.passage_node_keys}
+        # content -> index in passage list (acts as corpus id)
+        doc_content_to_doc_idx = {
+            chunk_id_to_row[cid]["content"]: idx for idx, cid in enumerate(self.passage_node_keys)
+        }
+
+        # Embedding model adapter: unify to batch_encode without instructions
+        class EmbeddingModelAdapter:
+            def __init__(self, hippo_embedding_model):
+                self._m = hippo_embedding_model
+
+            def batch_encode(self, texts: List[str]):
+                # Use passage instruction to align with chunk embeddings space
+                return self._m.batch_encode(
+                    texts,
+                    instruction=get_query_instruction("query_to_passage"),
+                    norm=True,
+                )
+
+            def encode(self, texts: List[str]):
+                return self.batch_encode(texts)
+
+        model_adapter = EmbeddingModelAdapter(self.embedding_model)
+
+        retrieval_results = []
+
+        for q_idx, query in tqdm(enumerate(queries), desc="Retrieving (Magix)", total=len(queries)):
+            try:
+                # Build dual queries: entity/fact space and passage space
+                query_entity_emb = self.embedding_model.batch_encode(
+                    [query], instruction=get_query_instruction("query_to_fact"), norm=True
+                )[0]
+                query_chunk_emb = self.embedding_model.batch_encode(
+                    [query], instruction=get_query_instruction("query_to_passage"), norm=True
+                )[0]
+
+                corpus_ids = enhanced_chunk_retrieval_direct(
+                    query=query,
+                    full_graph=graph_adapter,
+                    entities_vdb=ent_vdb,
+                    relationships_vdb=rel_vdb,
+                    text_chunks_db=text_db,
+                    chunks_vdb=ch_vdb,
+                    model=model_adapter,
+                    chunk_id_to_doc_id=chunk_id_to_doc_id,
+                    doc_id_to_doc_content=doc_id_to_doc_content,
+                    doc_content_to_doc_idx=doc_content_to_doc_idx,
+                    top_k_entities=top_k_entities,
+                    top_k_edges=top_k_edges,
+                    top_k_chunks=top_k_chunks,
+                    a=a,
+                    b=b,
+                    c=c,
+                    relevance_threshold=relevance_threshold,
+                    method=method,
+                    allow_dpr_fallback=allow_dpr_fallback,
+                    entity_query_embedding=query_entity_emb,
+                    chunk_query_embedding=query_chunk_emb,
+                )
+            except Exception as e:
+                logger.error(f"Magix retrieval failed for query idx {q_idx}: {e}")
+                corpus_ids = []
+
+            # Build docs list from indices
+            top_ids = corpus_ids[:num_to_retrieve]
+            top_k_docs = []
+            for idx in top_ids:
+                try:
+                    chunk_key = self.passage_node_keys[idx]
+                    top_k_docs.append(self.chunk_embedding_store.get_row(chunk_key)["content"])
+                except Exception:
+                    continue
+
+            retrieval_results.append(
+                QuerySolution(
+                    question=query,
+                    docs=top_k_docs,
+                    doc_scores=None,
+                )
+            )
+
+        retrieve_end_time = time.time()
+        self.all_retrieval_time += retrieve_end_time - retrieve_start_time
+        logger.info(f"Total Retrieval Time (Magix) {self.all_retrieval_time:.2f}s")
+
+        if gold_docs is not None:
+            k_list = [1, 2, 5, 10, 20, 30, 50, 100, 150, 200]
+            overall_retrieval_result, _ = retrieval_recall_evaluator.calculate_metric_scores(
+                gold_docs=gold_docs,
+                retrieved_docs=[r.docs for r in retrieval_results],
+                k_list=k_list,
+            )
+            logger.info(f"Evaluation results for retrieval (Magix): {overall_retrieval_result}")
+            return retrieval_results, overall_retrieval_result
+        else:
+            return retrieval_results
+
+    def rag_qa_magix(
+        self,
+        queries: List[str | QuerySolution],
+        gold_docs: List[List[str]] = None,
+        gold_answers: List[List[str]] = None,
+        **magix_kwargs,
+    ) -> (
+        Tuple[List[QuerySolution], List[str], List[Dict]]
+        | Tuple[List[QuerySolution], List[str], List[Dict], Dict, Dict]
+    ):
+        """
+        QA flow using Magix retriever.
+        """
+        if gold_answers is not None:
+            qa_em_evaluator = QAExactMatch(global_config=self.global_config)
+            qa_f1_evaluator = QAF1Score(global_config=self.global_config)
+
+        overall_retrieval_result = None
+        if not isinstance(queries[0], QuerySolution):
+            if gold_docs is not None:
+                queries, overall_retrieval_result = self.retrieve_magix(
+                    queries=queries, gold_docs=gold_docs, **magix_kwargs
+                )
+            else:
+                queries = self.retrieve_magix(queries=queries, **magix_kwargs)
+
+        queries_solutions, all_response_message, all_metadata = self.qa(queries)
+
+        if gold_answers is not None:
+            overall_qa_em_result, _ = qa_em_evaluator.calculate_metric_scores(
+                gold_answers=gold_answers,
+                predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+                aggregation_fn=np.max,
+            )
+            overall_qa_f1_result, _ = qa_f1_evaluator.calculate_metric_scores(
+                gold_answers=gold_answers,
+                predicted_answers=[qa_result.answer for qa_result in queries_solutions],
+                aggregation_fn=np.max,
+            )
+            overall_qa_em_result.update(overall_qa_f1_result)
+            overall_qa_results = {k: round(float(v), 4) for k, v in overall_qa_em_result.items()}
+            logger.info(f"Evaluation results for QA (Magix): {overall_qa_results}")
+
             for idx, q in enumerate(queries_solutions):
                 q.gold_answers = list(gold_answers[idx])
                 if gold_docs is not None:
@@ -1570,6 +1985,28 @@ class HippoRAG:
                     for e in doc.get("extracted_entities", []) or []:
                         if isinstance(e, str) and e.strip():
                             unique_entities.add(e)
+
+                # Heuristic backfill from passages if still empty
+                if not unique_entities:
+                    logger.info("No entities from OpenIE; backfilling entities heuristically from passages.")
+                    for doc in all_openie_info:
+                        passage = doc.get("passage", "") or ""
+                        # Extract capitalized n-grams up to length 4
+                        try:
+                            tokens = re.findall(r"[A-Za-z]+", passage)
+                            # collect title-case unigrams/bigrams
+                            candidates = []
+                            for i, tok in enumerate(tokens):
+                                if tok[:1].isupper() and len(tok) > 2:
+                                    candidates.append(tok)
+                                    # bigram
+                                    if i + 1 < len(tokens) and tokens[i + 1][:1].isupper():
+                                        big = tok + " " + tokens[i + 1]
+                                        candidates.append(big)
+                            for cand in candidates:
+                                unique_entities.add(cand)
+                        except Exception:
+                            continue
 
                 if unique_entities:
                     logger.info(

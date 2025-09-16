@@ -190,12 +190,24 @@ class EntityDescriptionGenerator:
             raw_response, metadata, cache_hit = self.llm_model.infer(messages=messages)
             metadata["cache_hit"] = cache_hit
 
+            # Sanitize control characters
+            import re
+            sanitized = re.sub(r"[\x00-\x1F\x7F]", " ", raw_response)
+
             # Try parse JSON object mapping entity->description
-            start = raw_response.find("{")
-            end = raw_response.rfind("}") + 1
+            start = sanitized.find("{")
+            end = sanitized.rfind("}") + 1
             if start >= 0 and end > start:
-                json_str = raw_response[start:end]
-                data = json.loads(json_str)
+                json_str = sanitized[start:end]
+                try:
+                    data = json.loads(json_str)
+                except Exception:
+                    # attempt repair similar to fix_broken_generated_json
+                    from ..utils.llm_utils import fix_broken_generated_json
+                    repaired = fix_broken_generated_json(sanitized)
+                    start2 = repaired.find("{")
+                    end2 = repaired.rfind("}") + 1
+                    data = json.loads(repaired[start2:end2]) if start2 >= 0 and end2 > start2 else {}
             else:
                 data = {}
 

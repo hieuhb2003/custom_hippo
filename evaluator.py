@@ -568,7 +568,13 @@ python /home/hungpv/projects/custom_hippo/evaluator.py \
   --precision-mode ir \
   --contain-threshold 0.5
 python /home/hungpv/projects/custom_hippo/evaluator.py \
-  --input /home/hungpv/projects/custom_hippo/longmemeval_0_500_v3.json \
+  --input /home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.magix.retrieved.json \
+  --ks all,3,5,10 \
+  --precision-mode ir \
+  --contain-threshold 0.5
+
+python /home/hungpv/projects/custom_hippo/evaluator.py \
+  --input /home/hungpv/projects/custom_hippo/outputs/retrieved_datasets/longmemeval_0_500_v3.magix.retrieved.json \
   --ks all,3,5,10 \
   --precision-mode ir \
   --contain-threshold 0.5

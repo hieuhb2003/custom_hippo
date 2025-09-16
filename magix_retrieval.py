@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import numpy as np
 import math
 from collections import defaultdict
@@ -264,7 +264,10 @@ def enhanced_chunk_retrieval_direct(
     b: float = 0.5,            # NEW: weight
     c: float = 0.5,            # NEW: weight
     relevance_threshold: float = 0.7,  # NEW: align with async
-    method: str | None = None           # NEW: align with async
+    method: str | None = None,          # NEW: align with async
+    allow_dpr_fallback: bool = False,
+    entity_query_embedding: Optional[np.ndarray] = None,
+    chunk_query_embedding: Optional[np.ndarray] = None,
 ) -> List[str]:  # FIX: return type is list[str] (corpus_ids)
     """
     Synchronous version aligned with async variant. If method is None,
@@ -284,27 +287,44 @@ def enhanced_chunk_retrieval_direct(
             logger.error(f"Failed to encode text: {e}")
             raise
 
-    query_embedding = _encode_single(query)
+    if entity_query_embedding is None or chunk_query_embedding is None:
+        enc = _encode_single(query)
+        entity_query_embedding = entity_query_embedding if entity_query_embedding is not None else enc
+        chunk_query_embedding = chunk_query_embedding if chunk_query_embedding is not None else enc
 
     # Fast path: DPR-only when both entity/edge retrieval are disabled
     if top_k_entities == 0 and top_k_edges == 0:
-        vdb_results = chunks_vdb.query(query_embedding, top_k=top_k_chunks)
+        vdb_results = chunks_vdb.query(chunk_query_embedding, top_k=top_k_chunks)
         top_chunk_ids = [r.get("__id__") for r in vdb_results if r.get("__id__")]
         return process_chunk_id_results(top_chunk_ids, chunk_id_to_doc_id, doc_id_to_doc_content, doc_content_to_doc_idx, top_k=top_k_chunks)
 
     # --- entities
     top_entities, entity_similarities, entity_info, top_entities_similarities = retrieve_entities_and_similarities(
-        entity_query_embedding=query_embedding,
+        entity_query_embedding=entity_query_embedding,
         entities_vdb=entities_vdb,
         top_k_entities=top_k_entities
     )
     if not top_entities:
-        logger.warning("No top entities found. Returning empty result.")
+        logger.warning("No top entities found.")
+        if allow_dpr_fallback:
+            logger.warning("Falling back to DPR-only retrieval.")
+            try:
+                vdb_results = chunks_vdb.query(query_embedding, top_k=top_k_chunks)
+                top_chunk_ids = [r.get("__id__") for r in vdb_results if r.get("__id__")]
+                return process_chunk_id_results(
+                    top_chunk_ids,
+                    chunk_id_to_doc_id,
+                    doc_id_to_doc_content,
+                    doc_content_to_doc_idx,
+                    top_k=top_k_chunks,
+                )
+            except Exception as e:
+                logger.error(f"DPR fallback failed: {e}")
         return []
 
     # --- edges
     top_edges, edge_similarities, edge_info, top_edges_similarities = retrieve_edges_and_similarities(
-        entity_query_embedding=query_embedding,
+        entity_query_embedding=entity_query_embedding,
         relationships_vdb=relationships_vdb,
         top_k_edges=top_k_edges
     )
@@ -312,7 +332,7 @@ def enhanced_chunk_retrieval_direct(
     # --- chunks
     chunk_sim_scores, chunk_to_entities, chunk_to_edges, chunk_contents = retrieve_and_score_chunks(
         query=query,
-        query_embedding=query_embedding,
+        query_embedding=chunk_query_embedding,
         model=model,
         top_entities=top_entities,
         top_edges=top_edges,
@@ -323,6 +343,21 @@ def enhanced_chunk_retrieval_direct(
         chunks_vdb=chunks_vdb,
     )
     if not chunk_sim_scores:
+        logger.warning("No chunk similarity scores found.")
+        if allow_dpr_fallback:
+            logger.warning("Falling back to DPR-only retrieval.")
+            try:
+                vdb_results = chunks_vdb.query(query_embedding, top_k=top_k_chunks)
+                top_chunk_ids = [r.get("__id__") for r in vdb_results if r.get("__id__")]
+                return process_chunk_id_results(
+                    top_chunk_ids,
+                    chunk_id_to_doc_id,
+                    doc_id_to_doc_content,
+                    doc_content_to_doc_idx,
+                    top_k=top_k_chunks,
+                )
+            except Exception as e:
+                logger.error(f"DPR fallback failed: {e}")
         return []
 
     # mean scores per chunk from entity/edge
